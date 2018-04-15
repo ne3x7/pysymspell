@@ -3,8 +3,28 @@ import os
 import sys
 
 class SymSpell():
-    """
-    
+    """SymSpell: 1 million times faster through Symmetric Delete spelling correction algorithm.
+
+    The Symmetric Delete spelling correction algorithm reduces the complexity of edit candidate generation and dictionary lookup
+    for a given Damerau-Levenshtein distance. It is six orders of magnitude faster and language independent.
+    Opposite to other algorithms only deletes are required, no transposes + replaces + inserts.
+    Transposes + replaces + inserts of the input term are transformed into deletes of the dictionary term.
+    Replaces and inserts are expensive and language dependent: e.g. Chinese has 70,000 Unicode Han characters!
+
+    SymSpell supports compound splitting / decompounding of multi-word input strings with three cases:
+    1. mistakenly inserted space into a correct word led to two incorrect terms 
+    2. mistakenly omitted space between two correct words led to one incorrect combined term
+    3. multiple independent input terms with/without spelling errors
+
+    See https://github.com/wolfgarbe/SymSpell for details.
+
+    Args:
+        max_dictionary_edit_distance (int, optional): Maximum distance used to generate index. Also acts 
+            as an upper bound for `max_edit_distance` parameter in `lookup()` method. Defaults to 2.
+        prefix_length (int, optional): Prefix length. Should not be changed normally. Defaults to 7.
+        count_threshold (int, optional): Threshold corpus-count value for words to be considered correct.
+            Defaults to 1, values below zero are also mapped to 1. Consider setting a higher value if your
+            corpus contains mistakes.
     """
     def __init__(self, max_dictionary_edit_distance=2, prefix_length=7, count_threshold=1):
         self._distance_algorithm = 'damerau'
@@ -27,6 +47,15 @@ class SymSpell():
         self._compact_mask = (0xffffffff >> 8) << 2
 
     def _create_dictionary_entry(self, key, count):
+        """Creates or updates a dictionary entry.
+
+        Args:
+            key (str): Word to insert or update.
+            count (int): Count to save or add to existing.
+
+        Returns:
+            bool: True if word was added to the dictionary, False if word was updated or ignored.
+        """
         if count <= 0:
             if self._count_threshold > 0:
                 return False
@@ -71,6 +100,13 @@ class SymSpell():
         return True
 
     def load_dictionary(self, corpus):
+        """Loads dictionary from :param:`corpus` file.
+
+        File should contain space-separated word-count pairs one at a line.
+
+        Args:
+            corpus (str): Path to corpus file.
+        """
         if os.path.exists(corpus):
             with open(corpus, 'r') as f:
                 for line in f:
@@ -82,6 +118,16 @@ class SymSpell():
             self._deletes = dict()
 
     def create_dictionary(self, corpus):
+        """Creates dictionary from :param:`corpus` file.
+
+        Note:
+            Words are not preprocessed in any way. It is your duty to provide appropriate corpus. Also
+                keep in mind that the distance used to generate index is specified at initialization. Consider
+                doing a purge of below threshold words afterwards.
+
+        Args:
+            corpus (str): Path to corpus file.
+        """
         if os.path.exists(corpus):
             with open(corpus, 'r') as f:
                 for line in f:
@@ -92,9 +138,32 @@ class SymSpell():
             self._deletes = dict()
 
     def purge_below_threshold_words(self):
+        """Purges words below threshold.
+
+        Consider using this method after creating a dictionary to reduce memory usage. These words are not
+            used in any way during lookup.
+        """
         self._below_threshold_words = dict()
 
     def lookup(self, phrase, verbosity, max_edit_distance):
+        """Attempts to correct the spelling of :param:`phrase`.
+
+        Note:
+            Phrase is not preprocessed in any way.
+
+        Args:
+            phrase (str): Word to correct. Should be a valid word.
+            verbosity (int, 0, 1 or 2): Output toggle. Set to 0 to output closest most common correction,
+                set to 1 to output closest suggestion, set to 2 to output all suggestions.
+            max_edit_distance (int): Maximum edit distance to consider.
+
+        Returns:
+            list of :obj:`SuggestionItem`: Suggested corrections.
+
+        Raises:
+            AssertionError: If :param:`max_edit_distance` is larger than maximum edit distance specified 
+                at initialization.
+        """
         assert max_edit_distance <= self._max_dictionary_edit_distance, 'Distance too big'
         suggestions = list()
         phrase_len = len(phrase)
@@ -223,6 +292,22 @@ class SymSpell():
         return suggestions
 
     def lookup_compound(self, phrase, max_edit_distance):
+        """Attempts to correct the spelling of :param:`phrase`.
+
+        Note:
+            Phrase is not preprocessed in any way.
+
+        Args:
+            phrase (str): Sentence to correct.
+            max_edit_distance (int): Maximum edit distance to consider for each word.
+
+        Returns:
+            list of :obj:`SuggestionItem`: Length-one list with suggested correction.
+
+        Raises:
+            AssertionError: If :param:`max_edit_distance` is larger than maximum edit distance specified 
+                at initialization.
+        """
         assert max_edit_distance <= self._max_dictionary_edit_distance, 'Distance too big'
 
         terms_list_1 = self._parse_words(phrase)
@@ -305,6 +390,17 @@ class SymSpell():
         return [suggestion]
 
     def _delete_in_suggestion_prefix(self, delete, delete_len, suggestion, suggestion_len):
+        """Helper method to check if :param:`delete` is prefix of :param:`suggestion`.
+
+        Args:
+            delete (str): String to look for in prefix.
+            delete_len (int): Length of :param:`delete`.
+            suggestion (str): String to take prefix from.
+            suggestion_len (int): Length of :param:`suggestion`.
+
+        Returns:
+            bool: True if :param:`delete` is prefix of :param:`suggestion`, False otherwise.
+        """
         if delete_len == 0:
             return True
         if self._prefix_length < suggestion_len:
@@ -322,6 +418,18 @@ class SymSpell():
         return True
 
     def _edits(self, word, edit_distance, delete_words):
+        """helper recursive method to generate deletes.
+
+        Refer to article for details.
+
+        Args:
+            word (str): Word to generate deletes from.
+            edit_distance (int): Maximum edit distance to consider, recursion depth.
+            delete_words (set): Generated deletes, pass empty set first time.
+
+        Returns:
+            delete_words (set): Generated deletes.
+        """
         edit_distance += 1
         for i in range(len(word)):
             delete = word[:i] + word[i+1:]
