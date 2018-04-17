@@ -43,6 +43,8 @@ class SymSpell():
             count_threshold = 1
 
         self._words = dict()
+        self._deletes=dict()
+
         self._max_dictionary_edit_distance = max_dictionary_edit_distance
         self._prefix_length = prefix_length
         self._count_threshold = count_threshold
@@ -102,15 +104,14 @@ class SymSpell():
 
         edits = self._edits_prefix(key)
 
-        if self._deletes is None:
-            self._deletes = dict()
+        #if self._deletes is None:
+        #    self._deletes = dict()
 
         for edit in edits:
             hs = self._hash(edit)
             suggestions = list()
             #if hs in self._deletes.keys():
             if hs in self._deletes:
-            #if ss._deletes.has_key(hs):
                 suggestions = self._deletes.get(hs)
                 suggestions.append(key)
                 self._deletes[hs] = suggestions
@@ -118,6 +119,44 @@ class SymSpell():
                 suggestions = [key]
                 self._deletes[hs] = suggestions
         return True
+
+
+
+            
+    def create_dictionary_entry_MT(self, key): #Multi thread
+        """
+        This will be used to load preprocessed data and hence no need to check/validate etc
+        Also not worried about count as it is a temporary place holder to build it
+        """
+        """Creates or updates a dictionary entry.
+
+        Args:
+            key (str): Word to insert or update.
+            count (int): Count to save or add to existing.
+
+        Returns:
+            bool: True if word was added to the dictionary, False if word was updated or ignored.
+        """
+
+        edits = self._edits_prefix(key)
+
+        #if self._deletes is None:
+        #    self._deletes = dict()
+
+        for edit in edits:
+            hs = self._hash(edit)
+            suggestions = list()
+            #if hs in self._deletes.keys():
+            if hs in self._deletes:
+                suggestions = self._deletes.get(hs)
+                suggestions.append(key)
+                self._deletes[hs] = suggestions
+            else:
+                suggestions = [key]
+                self._deletes[hs] = suggestions
+        return True
+
+
 
     def load_dictionary(self, corpus):
         """Loads dictionary from :param:`corpus` file.
@@ -242,13 +281,53 @@ class SymSpell():
         return;
     
         
-    def save_words_with_freq_as_json(self,filename,encoding="utf8"):
+    def save_complete_model_as_json(self,filename,encoding="utf8"):
+
         print('Saving dictionary...')
+
+        myData = dict()
+        myData["_words"]=self._words
+        myData["_deletes"]=self._deletes
+        myData["_below_threshold_words"]=self._below_threshold_words
+        myData["_max_length"]=self._max_length
+        myData["_distance_algorithm"]=self._distance_algorithm
+        myData["_max_dictionary_edit_distance"]=self._max_dictionary_edit_distance
+        myData["_prefix_length"]=self._prefix_length
+        myData["_count_threshold"]=self._count_threshold
+        myData["_compact_mask"]=self._compact_mask
+
         with open(filename, 'w',encoding=encoding) as fp:
-            json.dump(self._words, fp)        
+            json.dump(myData, fp)        
         print('Saved dictionary...')
         return;
     
+    def load_comple_model_from_json(self,filename,encoding="utf8"):
+        print('Loading dictionary...')
+        myData = dict()
+        with open(filename, 'r',encoding=encoding) as fp:
+            myData = json.load(fp)
+        print('Processing dictionary...')
+
+        #Push words and word counts to our master SymSpell
+        for word in myData["_words"]:
+            count=int(myData["_words"][word])
+            self._words[word]=count
+            if len(word) > self._max_length:
+                self._max_length = len(word)
+        print('Copied %i words to master dictionary...' % len(self._words))
+        #As json load converts key to string, we are converting it back to int and storing it in _deletes
+        self._deletes = {int(key):value for key, value in myData["_deletes"].items()}
+        print('Copied %i hashes to master dictionary...' % len(self._deletes))
+
+        self._below_threshold_words=myData["_below_threshold_words"]
+        self._distance_algorithm=myData["_distance_algorithm"]
+        self._max_dictionary_edit_distance=myData["_max_dictionary_edit_distance"]
+        self._prefix_length=myData["_prefix_length"]
+        self._count_threshold=myData["_count_threshold"]
+        self._compact_mask=myData["_compact_mask"]
+
+        return
+
     def load_words_with_freq_from_json_and_build_dictionary(self,filename,encoding="utf8"):
         print('Loading dictionary...')
         myData = dict()
@@ -256,8 +335,6 @@ class SymSpell():
         with open(filename, 'r',encoding=encoding) as fp:
             myData = json.load(fp)
 
-        print('Processing dictionary...')
-            
         for word in myData:
             self._create_dictionary_entry(word,myData[word])        
         print('Loaded dictionary...')
