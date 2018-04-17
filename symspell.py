@@ -1,6 +1,8 @@
 import numpy as np
 import os
 import sys
+import re
+import json
 
 class SymSpell():
     """SymSpell: 1 million times faster through Symmetric Delete spelling correction algorithm.
@@ -45,7 +47,19 @@ class SymSpell():
         self._prefix_length = prefix_length
         self._count_threshold = count_threshold
         self._compact_mask = (0xffffffff >> 8) << 2
+        
+    def set_max_dictionary_edit_distance(self,max_dictionary_edit_distance=2):
+        if max_dictionary_edit_distance < 0:
+            max_dictionary_edit_distance = 2
+        self._max_dictionary_edit_distance = max_dictionary_edit_distance
+            
+    def set_count_threshold(self,count_threshold=1):
+        if count_threshold < 0:
+            count_threshold = 1
+        self._count_threshold = count_threshold
 
+
+            
     def _create_dictionary_entry(self, key, count):
         """Creates or updates a dictionary entry.
 
@@ -56,12 +70,16 @@ class SymSpell():
         Returns:
             bool: True if word was added to the dictionary, False if word was updated or ignored.
         """
+        key=key.strip() #remove while spaces
+        if(len(key) == 0):
+            return False;
+
         if count <= 0:
             if self._count_threshold > 0:
                 return False
             count = 0
 
-        if self._count_threshold > 1 and key in self._below_threshold_words.keys():
+        if self._count_threshold > 1 and key in self._below_threshold_words: #.keys():
             count_previous = self._below_threshold_words[key]
             count = count_previous + count
             if count >= self._count_threshold:
@@ -69,7 +87,7 @@ class SymSpell():
             else:
                 self._below_threshold_words[key] = count
                 return False
-        elif key in self._words.keys():
+        elif key in self._words: #.keys():
             count_previous = self._words[key]
             count = count_previous + count
             self._words[key] = count
@@ -90,7 +108,9 @@ class SymSpell():
         for edit in edits:
             hs = self._hash(edit)
             suggestions = list()
-            if hs in self._deletes.keys():
+            #if hs in self._deletes.keys():
+            if hs in self._deletes:
+            #if ss._deletes.has_key(hs):
                 suggestions = self._deletes.get(hs)
                 suggestions.append(key)
                 self._deletes[hs] = suggestions
@@ -116,6 +136,71 @@ class SymSpell():
 
         if self._deletes is None:
             self._deletes = dict()
+
+
+    def _clean_text(self,text):
+        '''Remove unwanted characters and extra spaces from the text'''
+        text = re.sub(" [b-zB-Z] ", ' ', text) #except a or A remove all single char words
+        text = re.sub('[^0-9a-zA-Z]+', ' ', text) #remove all non alpha numeric chars
+        text = re.sub('[ \t]+', ' ', text) #remove continuous space/tabs
+        text = re.sub(r'\n', ' ', text) 
+        text = re.sub(r'[{}@_*>()\\#%+=\[\]]','', text)
+        text = re.sub('a0','', text)
+        text = re.sub('\'92t','\'t', text)
+        text = re.sub('\'92s','\'s', text)
+        text = re.sub('\'92m','\'m', text)
+        text = re.sub('\'92ll','\'ll', text)
+        text = re.sub('\'91','', text)
+        text = re.sub('\'92','', text)
+        text = re.sub('\'93','', text)
+        text = re.sub('\'94','', text)
+        text = re.sub('\.','. ', text)
+        text = re.sub('\!','! ', text)
+        text = re.sub('\?','? ', text)
+        text = re.sub(' +',' ', text)
+        text = re.sub('\s+',' ', text)
+        text = re.sub('[0-9]+','', text)
+        try:
+            text1=unidecode(str(text))
+        except:
+            return text
+    
+        return text1
+
+
+    def clean_and_create_dictionary(self, corpus,min_charsize=2,default_freq=1,max_word_length=1000,encoding="utf8"):
+        """Creates dictionary from :param:`corpus` file.
+
+        Note:
+            Some amount of word pre-processing happens to support loading of dictionary files etc.
+            Use default_freq, if you have word list, but not count. May be you set default_freq for those words as 1000?
+            Use min_charsize, if you are loading from some source and want to ignore wrong wors / abbrs like SMS slang words
+            Also you might want to ignore lengthy words from some corpus. Use max_word_length
+        Args:
+            corpus (str): Path to corpus file.
+        """
+        if(max_word_length < 1 or max_word_length > 1000):
+            max_word_length=1000;
+            
+        if(default_freq < 1):
+            default_freq=1;
+            
+        if(min_charsize < 2 or min_charsize > 25):
+            min_charsize=2;
+
+        if os.path.exists(corpus):
+            with open(corpus, 'r',encoding=encoding) as f:
+                for line in f:
+                    line=self._clean_text(line)
+                    for key in line.split():
+                        key=key.strip();
+                        l=len(key)
+                        if(l>min_charsize and l<=max_word_length):
+                            self._create_dictionary_entry(key, default_freq)
+
+        if self._deletes is None:
+            self._deletes = dict()
+
 
     def create_dictionary(self, corpus):
         """Creates dictionary from :param:`corpus` file.
@@ -144,6 +229,39 @@ class SymSpell():
             used in any way during lookup.
         """
         self._below_threshold_words = dict()
+        
+    def updateWordsFromSavedJSON(self,word,count):
+        self._words[word]=count;
+        return;
+    
+    def updateDeletesFromSavedJSON(self,hs,suggestions):
+        if self._deletes is None:
+            self._deletes = dict()
+        self._max_length=25;
+        self._deletes[hs]=suggestions;
+        return;
+    
+        
+    def save_words_with_freq_as_json(self,filename,encoding="utf8"):
+        print('Saving dictionary...')
+        with open(filename, 'w',encoding=encoding) as fp:
+            json.dump(self._words, fp)        
+        print('Saved dictionary...')
+        return;
+    
+    def load_words_with_freq_from_json_and_build_dictionary(self,filename,encoding="utf8"):
+        print('Loading dictionary...')
+        myData = dict()
+
+        with open(filename, 'r',encoding=encoding) as fp:
+            myData = json.load(fp)
+
+        print('Processing dictionary...')
+            
+        for word in myData:
+            self._create_dictionary_entry(word,myData[word])        
+        print('Loaded dictionary...')
+
 
     def lookup(self, phrase, verbosity, max_edit_distance):
         """Attempts to correct the spelling of :param:`phrase`.
@@ -175,7 +293,7 @@ class SymSpell():
         considered_suggestions = set()
         suggestions_count = 0
 
-        if phrase in self._words.keys():
+        if phrase in self._words: #.keys():
             suggestions_count = self._words[phrase]
             suggestions.append(SuggestionItem(phrase, 0, suggestions_count))
             if verbosity < 2:
@@ -195,6 +313,7 @@ class SymSpell():
 
         comp = EditDistance(phrase, self._distance_algorithm)
 
+
         while candidate_ptr < len(candidates):
             candidate = candidates[candidate_ptr]
             candidate_ptr += 1
@@ -207,7 +326,7 @@ class SymSpell():
                 else:
                     break
 
-            if self._hash(candidate) in self._deletes.keys():
+            if self._hash(candidate) in self._deletes:# .keys():
                 dictionary_suggestions = self._deletes[self._hash(candidate)]
                 for suggestion in dictionary_suggestions:
                     if suggestion == phrase:
@@ -454,10 +573,10 @@ class SymSpell():
         if l_mask > 3:
             l_mask = 3
 
-        hs = 2166136261
+        hs =  2147483647 #2166136261
         for i in range(l):
             hs ^= ord(s[i])
-            hs *= 16777619
+            hs *= 201326611 #16777619
         hs &= self._compact_mask
         hs |= l_mask
         return hs
