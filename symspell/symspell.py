@@ -1,6 +1,8 @@
 import numpy as np
 import os
 import sys
+import re
+import json
 from __future__ import (absolute_import, division, print_function, unicode_literals)
 from builtins import (bytes, dict, int, list, object, range, str, ascii, chr, hex, input, next, oct, open, pow, round, super, filter, map, zip)
 
@@ -43,10 +45,32 @@ class SymSpell():
             count_threshold = 1
 
         self._words = dict()
+        self._deletes=dict()
+
         self._max_dictionary_edit_distance = max_dictionary_edit_distance
         self._prefix_length = prefix_length
         self._count_threshold = count_threshold
         self._compact_mask = (0xffffffff >> 8) << 2
+        
+    @property
+    def _max_dictionary_edit_distance(self):
+        return self._max_dictionary_edit_distance
+    
+    @_max_dictionary_edit_distance.setter
+    def _max_dictionary_edit_distance(self, max_dictionary_edit_distance):
+        if max_dictionary_edit_distance < 0:
+            max_dictionary_edit_distance = 2
+        self._max_dictionary_edit_distance = max_dictionary_edit_distance
+    
+    @property
+    def _count_threshold(self):
+        return self._count_threshold
+    
+    @_count_threshold.setter
+    def _count_threshold(self, count_threshold):
+        if count_threshold < 0:
+            count_threshold = 1
+        self._count_threshold = count_threshold
 
     def _create_dictionary_entry(self, key, count):
         """Creates or updates a dictionary entry.
@@ -58,6 +82,10 @@ class SymSpell():
         Returns:
             bool: True if word was added to the dictionary, False if word was updated or ignored.
         """
+        key=key.strip() #remove while spaces
+        if(len(key) == 0):
+            return False;
+
         if count <= 0:
             if self._count_threshold > 0:
                 return False
@@ -71,7 +99,7 @@ class SymSpell():
             else:
                 self._below_threshold_words[key] = count
                 return False
-        elif key in self._words.keys():
+        elif key in self._words:
             count_previous = self._words[key]
             count = count_previous + count
             self._words[key] = count
@@ -86,8 +114,31 @@ class SymSpell():
 
         edits = self._edits_prefix(key)
 
-        if self._deletes is None:
-            self._deletes = dict()
+        for edit in edits:
+            hs = self._hash(edit)
+            suggestions = list()
+            
+            if hs in self._deletes:
+                suggestions = self._deletes.get(hs)
+                suggestions.append(key)
+                self._deletes[hs] = suggestions
+            else:
+                suggestions = [key]
+                self._deletes[hs] = suggestions
+        return True
+            
+    def create_dictionary_entry_MT(self, key):
+        """Creates or updates a dictionary entry from preprocessed data.
+
+        Args:
+            key (str): Word to insert or update.
+            count (int): Count to save or add to existing.
+
+        Returns:
+            bool: True if word was added to the dictionary, False if word was updated or ignored.
+        """
+
+        edits = self._edits_prefix(key)
 
         for edit in edits:
             hs = self._hash(edit)
@@ -119,13 +170,76 @@ class SymSpell():
         if self._deletes is None:
             self._deletes = dict()
 
+
+    def _clean_text(self,text):
+        '''Remove unwanted characters and extra spaces from the text'''
+        text = re.sub(" [b-zB-Z] ", ' ', text) #except a or A remove all single char words
+        text = re.sub('[^0-9a-zA-Z]+', ' ', text) #remove all non alpha numeric chars
+        text = re.sub('[ \t]+', ' ', text) #remove continuous space/tabs
+        text = re.sub(r'\n', ' ', text) 
+        text = re.sub(r'[{}@_*>()\\#%+=\[\]]','', text)
+        text = re.sub('a0','', text)
+        text = re.sub('\'92t','\'t', text)
+        text = re.sub('\'92s','\'s', text)
+        text = re.sub('\'92m','\'m', text)
+        text = re.sub('\'92ll','\'ll', text)
+        text = re.sub('\'91','', text)
+        text = re.sub('\'92','', text)
+        text = re.sub('\'93','', text)
+        text = re.sub('\'94','', text)
+        text = re.sub('\.','. ', text)
+        text = re.sub('\!','! ', text)
+        text = re.sub('\?','? ', text)
+        text = re.sub(' +',' ', text)
+        text = re.sub('\s+',' ', text)
+        text = re.sub('[0-9]+','', text)
+        try:
+            text1 = unidecode(str(text))
+        except:
+            return text
+        return text1
+
+    def clean_and_create_dictionary(self, corpus,min_charsize=2,default_freq=1,max_word_length=1000,encoding="utf8"):
+        """Creates dictionary from :param:`corpus` file.
+
+        Note:
+            Some amount of word pre-processing happens to support loading of dictionary files etc.
+            Use default_freq, if you have word list, but not count. May be you set default_freq for those words as 1000?
+            Use min_charsize, if you are loading from some source and want to ignore wrong wors / abbrs like SMS slang words
+            Also you might want to ignore lengthy words from some corpus. Use max_word_length
+        Args:
+            corpus (str): Path to corpus file.
+        """
+        if(max_word_length < 1 or max_word_length > 1000):
+            max_word_length=1000;
+            
+        if(default_freq < 1):
+            default_freq=1;
+            
+        if(min_charsize < 2 or min_charsize > 25):
+            min_charsize=2;
+
+        if os.path.exists(corpus):
+            with open(corpus, 'r',encoding=encoding) as f:
+                for line in f:
+                    line=self._clean_text(line)
+                    for key in line.split():
+                        key=key.strip();
+                        l=len(key)
+                        if(l>min_charsize and l<=max_word_length):
+                            self._create_dictionary_entry(key, default_freq)
+
+        if self._deletes is None:
+            self._deletes = dict()
+
+
     def create_dictionary(self, corpus):
         """Creates dictionary from :param:`corpus` file.
 
         Note:
             Words are not preprocessed in any way. It is your duty to provide appropriate corpus. Also
-                keep in mind that the distance used to generate index is specified at initialization. Consider
-                doing a purge of below threshold words afterwards.
+            keep in mind that the distance used to generate index is specified at initialization. Consider
+            doing a purge of below threshold words afterwards.
 
         Args:
             corpus (str): Path to corpus file.
@@ -143,9 +257,80 @@ class SymSpell():
         """Purges words below threshold.
 
         Consider using this method after creating a dictionary to reduce memory usage. These words are not
-            used in any way during lookup.
+        used in any way during lookup.
         """
         self._below_threshold_words = dict()
+        
+    def updateWordsFromSavedJSON(self,word,count):
+        self._words[word]=count;
+        return;
+    
+    def updateDeletesFromSavedJSON(self,hs,suggestions):
+        if self._deletes is None:
+            self._deletes = dict()
+        self._max_length=25;
+        self._deletes[hs]=suggestions;
+        return;
+    
+        
+    def save_complete_model_as_json(self,filename,encoding="utf8"):
+
+        print('Saving dictionary...')
+
+        myData = dict()
+        myData["_words"]=self._words
+        myData["_deletes"]=self._deletes
+        myData["_below_threshold_words"]=self._below_threshold_words
+        myData["_max_length"]=self._max_length
+        myData["_distance_algorithm"]=self._distance_algorithm
+        myData["_max_dictionary_edit_distance"]=self._max_dictionary_edit_distance
+        myData["_prefix_length"]=self._prefix_length
+        myData["_count_threshold"]=self._count_threshold
+        myData["_compact_mask"]=self._compact_mask
+
+        with open(filename, 'w',encoding=encoding) as fp:
+            json.dump(myData, fp)        
+        print('Saved dictionary...')
+        return;
+    
+    def load_comple_model_from_json(self,filename,encoding="utf8"):
+        print('Loading dictionary...')
+        myData = dict()
+        with open(filename, 'r',encoding=encoding) as fp:
+            myData = json.load(fp)
+        print('Processing dictionary...')
+
+        #Push words and word counts to our master SymSpell
+        for word in myData["_words"]:
+            count=int(myData["_words"][word])
+            self._words[word]=count
+            if len(word) > self._max_length:
+                self._max_length = len(word)
+        print('Copied %i words to master dictionary...' % len(self._words))
+        #As json load converts key to string, we are converting it back to int and storing it in _deletes
+        self._deletes = {int(key):value for key, value in myData["_deletes"].items()}
+        print('Copied %i hashes to master dictionary...' % len(self._deletes))
+
+        self._below_threshold_words=myData["_below_threshold_words"]
+        self._distance_algorithm=myData["_distance_algorithm"]
+        self._max_dictionary_edit_distance=myData["_max_dictionary_edit_distance"]
+        self._prefix_length=myData["_prefix_length"]
+        self._count_threshold=myData["_count_threshold"]
+        self._compact_mask=myData["_compact_mask"]
+
+        return
+
+    def load_words_with_freq_from_json_and_build_dictionary(self,filename,encoding="utf8"):
+        print('Loading dictionary...')
+        myData = dict()
+
+        with open(filename, 'r',encoding=encoding) as fp:
+            myData = json.load(fp)
+
+        for word in myData:
+            self._create_dictionary_entry(word,myData[word])        
+        print('Loaded dictionary...')
+
 
     def lookup(self, phrase, verbosity, max_edit_distance):
         """Attempts to correct the spelling of :param:`phrase`.
@@ -196,6 +381,7 @@ class SymSpell():
             candidates.append(phrase)
 
         comp = EditDistance(phrase, self._distance_algorithm)
+
 
         while candidate_ptr < len(candidates):
             candidate = candidates[candidate_ptr]
@@ -456,10 +642,10 @@ class SymSpell():
         if l_mask > 3:
             l_mask = 3
 
-        hs = 2166136261
+        hs =  2147483647 #2166136261
         for i in range(l):
             hs ^= ord(s[i])
-            hs *= 16777619
+            hs *= 201326611 #16777619
         hs &= self._compact_mask
         hs |= l_mask
         return hs
