@@ -1,6 +1,8 @@
 import numpy as np
 import os
 import sys
+from __future__ import (absolute_import, division, print_function, unicode_literals)
+from builtins import (bytes, dict, int, list, object, range, str, ascii, chr, hex, input, next, oct, open, pow, round, super, filter, map, zip)
 
 class SymSpell():
     """SymSpell: 1 million times faster through Symmetric Delete spelling correction algorithm.
@@ -61,7 +63,7 @@ class SymSpell():
                 return False
             count = 0
 
-        if self._count_threshold > 1 and key in self._below_threshold_words.keys():
+        if self._count_threshold > 1 and key in self._below_threshold_words:
             count_previous = self._below_threshold_words[key]
             count = count_previous + count
             if count >= self._count_threshold:
@@ -90,7 +92,7 @@ class SymSpell():
         for edit in edits:
             hs = self._hash(edit)
             suggestions = list()
-            if hs in self._deletes.keys():
+            if hs in self._deletes:
                 suggestions = self._deletes.get(hs)
                 suggestions.append(key)
                 self._deletes[hs] = suggestions
@@ -175,7 +177,7 @@ class SymSpell():
         considered_suggestions = set()
         suggestions_count = 0
 
-        if phrase in self._words.keys():
+        if phrase in self._words:
             suggestions_count = self._words[phrase]
             suggestions.append(SuggestionItem(phrase, 0, suggestions_count))
             if verbosity < 2:
@@ -207,7 +209,7 @@ class SymSpell():
                 else:
                     break
 
-            if self._hash(candidate) in self._deletes.keys():
+            if self._hash(candidate) in self._deletes:
                 dictionary_suggestions = self._deletes[self._hash(candidate)]
                 for suggestion in dictionary_suggestions:
                     if suggestion == phrase:
